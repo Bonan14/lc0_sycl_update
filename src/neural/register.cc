@@ -1,6 +1,6 @@
 /*
   This file is part of Leela Chess Zero.
-  Copyright (C) 2020 The LCZero Authors
+  Copyright (C) 2024 The LCZero Authors
 
   Leela Chess is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -25,16 +25,13 @@
   Program grant you additional permission to convey the resulting work.
 */
 
-#pragma once
-
-#include "mcts/stoppers/timemgr.h"
-#include "utils/optionsdict.h"
+#include "neural/register.h"
 
 namespace lczero {
 
-float ComputeEstimatedMovesToGo(int ply, float midpoint, float steepness);
-
-std::unique_ptr<TimeManager> MakeLegacyTimeManager(int64_t move_overhead,
-                                                   const OptionsDict& params);
+BackendManager* BackendManager::Get() {
+  static BackendManager instance;
+  return &instance;
+}
 
 }  // namespace lczero

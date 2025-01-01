@@ -1,6 +1,6 @@
 /*
   This file is part of Leela Chess Zero.
-  Copyright (C) 2020 The LCZero Authors
+  Copyright (C) 2024 The LCZero Authors
 
   Leela Chess is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -27,11 +27,31 @@
 
 #pragma once
 
-#include "utils/optionsdict.h"
+#include <functional>
+#include <string>
+
+#include "neural/network.h"
+#include "neural/register.h"
 
 namespace lczero {
 
-std::unique_ptr<TimeManager> MakeAlphazeroTimeManager(
-    int64_t move_overhead, const OptionsDict& params);
+class NetworkAsBackendFactory : public BackendFactory {
+ public:
+  using FactoryFunc = std::function<std::unique_ptr<Network>(
+      const std::optional<WeightsFile>&, const OptionsDict&)>;
+
+  NetworkAsBackendFactory(const std::string& name, FactoryFunc factory,
+                          int priority = 0);
+
+  virtual int GetPriority() const { return priority_; }
+  virtual std::string_view GetName() const { return name_; }
+  virtual std::unique_ptr<Backend> Create(const std::optional<WeightsFile>&,
+                                          const OptionsDict&);
+
+ private:
+  std::string name_;
+  FactoryFunc factory_;
+  int priority_;
+};
 
 }  // namespace lczero
