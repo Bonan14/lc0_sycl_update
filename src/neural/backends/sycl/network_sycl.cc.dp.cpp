@@ -930,7 +930,7 @@ class SyclNetwork : public Network {
           sycl::free(offset_pointers_, *sycl_queue_);
       if (head_offset_pointers_)
           sycl::free(head_offset_pointers_, *sycl_queue_);
-      //cublas_ = nullptr;
+      *sycl_queue_ = nullptr;
     }
   }
 
