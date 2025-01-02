@@ -200,7 +200,7 @@ class SyclNetwork : public Network {
                  nf.network() == NF::NETWORK_ATTENTIONBODY_WITH_MULTIHEADFORMAT;
 
     max_batch_size_ = options.GetOrDefault<int>("max_batch", 1024);
-    std::string device_plat_ = options.GetOrDefault<std::string>("platform", "OpenCL");
+    std::string device_plat_ = options.GetOrDefault<std::string>("platform", "");
     
     // Get all the available platforms
     auto platforms = sycl::platform::get_platforms();
