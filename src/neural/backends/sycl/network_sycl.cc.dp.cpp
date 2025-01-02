@@ -200,13 +200,14 @@ class SyclNetwork : public Network {
                  nf.network() == NF::NETWORK_ATTENTIONBODY_WITH_MULTIHEADFORMAT;
 
     max_batch_size_ = options.GetOrDefault<int>("max_batch", 1024);
+    std::string device_plat_ = options.GetOrDefault<std::string>("platform", "OpenCL");
     
     // Get all the available platforms
     auto platforms = sycl::platform::get_platforms();
     
     // Look only for OpenCL platforms
     for (const auto& platform : platforms) {
-      if (platform.get_info<sycl::info::platform::name>().find("OpenCL") != std::string::npos) {
+      if (platform.get_info<sycl::info::platform::name>().find(device_plat_) != std::string::npos) {
             auto platform_devices = platform.get_devices();
             devices.insert(devices.end(), platform_devices.begin(), platform_devices.end());
         }
@@ -930,7 +931,7 @@ class SyclNetwork : public Network {
           sycl::free(offset_pointers_, *sycl_queue_);
       if (head_offset_pointers_)
           sycl::free(head_offset_pointers_, *sycl_queue_);
-      *sycl_queue_ = nullptr;
+      //*sycl_queue_ = nullptr;
     }
   }
 
