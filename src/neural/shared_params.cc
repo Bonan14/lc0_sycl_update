@@ -53,6 +53,10 @@ const OptionId SharedBackendParams::kBackendOptionsId{
     "Parameters of neural network backend. "
     "Exact parameters differ per backend.",
     'o'};
+const OptionId SharedBackendParams::kNNCacheSizeId{
+    "nncache", "NNCacheSize",
+    "Number of positions to store in a memory cache. A large cache can speed "
+    "up searching, but takes memory."};
 
 void SharedBackendParams::Populate(OptionsParser* options) {
   options->Add<FloatOption>(kPolicySoftmaxTemp, 0.1f, 10.0f) = 1.359f;
@@ -60,16 +64,16 @@ void SharedBackendParams::Populate(OptionsParser* options) {
   options->Add<ChoiceOption>(kHistoryFill, history_fill_opt) = "fen_only";
 
 #if defined(EMBED)
-  constexpr const char* kEmbed = "<built in>";
   options->Add<StringOption>(SharedBackendParams::kWeightsId) = kEmbed;
 #else
-  constexpr const char* kAutoDiscover = "<autodiscover>";
   options->Add<StringOption>(SharedBackendParams::kWeightsId) = kAutoDiscover;
 #endif
   const auto backends = NetworkFactory::Get()->GetBackendsList();
   options->Add<ChoiceOption>(SharedBackendParams::kBackendId, backends) =
       backends.empty() ? "<none>" : backends[0];
   options->Add<StringOption>(SharedBackendParams::kBackendOptionsId);
+  options->Add<IntOption>(SharedBackendParams::kNNCacheSizeId, 0, 999999999) =
+      2000000;
 }
 
 }  // namespace lczero
