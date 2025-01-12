@@ -80,21 +80,15 @@ class MEvaluator {
  public:
   MEvaluator()
       : enabled_{false},
-        m_slope_{0.0f},
-        m_cap_{0.0f},
-        a_constant_{0.0f},
-        a_linear_{0.0f},
-        a_square_{0.0f},
+        move_midpoint_{0.0f},
+        steepness_factor_{0.0f},
         q_threshold_{0.0f},
         parent_m_{0.0f} {}
 
   MEvaluator(const SearchParams& params, const Node* parent = nullptr)
       : enabled_{true},
-        m_slope_{params.GetMovesLeftSlope()},
-        m_cap_{params.GetMovesLeftMaxEffect()},
-        a_constant_{params.GetMovesLeftConstantFactor()},
-        a_linear_{params.GetMovesLeftScaledFactor()},
-        a_square_{params.GetMovesLeftQuadraticFactor()},
+        move_midpoint_{params.GetMovesLeftMidpointMove()},
+        steepness_factor_{params.GetMovesLeftSteepnessFactor()},
         q_threshold_{params.GetMovesLeftThreshold()},
         parent_m_{parent ? parent->GetM() : 0.0f},
         parent_within_threshold_{parent ? WithinThreshold(parent, q_threshold_)
@@ -108,24 +102,27 @@ class MEvaluator {
     }
   }
 
-  // Calculates the utility for favoring shorter wins and longer losses.
-  float GetMUtility(Node* child, float q) const {
+   // Calculates the utility for favoring shorter wins and longer losses.
+   double GetMUtility(Node* child, float q) const {
     if (!enabled_ || !parent_within_threshold_) return 0.0f;
-    const float child_m = child->GetM();
-    float m = std::clamp(m_slope_ * (child_m - parent_m_), -m_cap_, m_cap_);
-    m *= FastSign(-q);
-    if (q_threshold_ > 0.0f && q_threshold_ < 1.0f) {
-      // This allows a smooth M effect with higher q thresholds, which is
-      // necessary for using MLH together with contempt.
-      q = std::max(0.0f, (std::abs(q) - q_threshold_)) / (1.0f - q_threshold_);
-    }
-    m *= a_constant_ + a_linear_ * std::abs(q) + a_square_ * q * q;
+    const float child_m = std::round(child->GetM() / 2.0f);
+    // Weighted average(w) of movesleft to give greater priority to
+    // shorter moves when winning and longer moves when losing.
+    double w = 1.0f / (1.0f + std::exp((steepness_factor_) 
+                     * ((move_midpoint_ - child_m) / 200.0f)));
+    double m = ((move_midpoint_ - child_m) / 200.0f);
+    // Add 1 to the value before taking the logarithm,
+    // to avoid getting undefined values.
+    // use abs and copysign to protect against -inf 
+    // when q negative.
+    float log = std::copysign(1.0f, q) * std::log(std::abs(q) + 1.0f);
+    m *= (1.0f - w) * q + w * (log + 0.5f * q);
     return m;
   }
 
-  float GetMUtility(const EdgeAndNode& child, float q) const {
+  double GetMUtility(const EdgeAndNode& child, float q) const {
     if (!enabled_ || !parent_within_threshold_) return 0.0f;
-    if (child.GetN() == 0) return GetDefaultMUtility();
+    if (child.GetN() == 0) return 0.0f;
     return GetMUtility(child.node(), q);
   }
 
@@ -138,11 +135,8 @@ class MEvaluator {
   }
 
   const bool enabled_;
-  const float m_slope_;
-  const float m_cap_;
-  const float a_constant_;
-  const float a_linear_;
-  const float a_square_;
+  const float move_midpoint_;
+  const float steepness_factor_;
   const float q_threshold_;
   float parent_m_ = 0.0f;
   bool parent_within_threshold_ = false;
