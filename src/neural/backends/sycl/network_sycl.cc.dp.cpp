@@ -29,6 +29,8 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <cctype>
+#include <string>
 
 #include "sycl_common.h"
 #include "inputs_outputs.h"
@@ -200,14 +202,18 @@ class SyclNetwork : public Network {
                  nf.network() == NF::NETWORK_ATTENTIONBODY_WITH_MULTIHEADFORMAT;
 
     max_batch_size_ = options.GetOrDefault<int>("max_batch", 1024);
-    std::string device_plat_ = options.GetOrDefault<std::string>("platform", "");
-    
+    std::string device_plat_ = options.GetOrDefault<std::string>("platform", "OpenCL");
+    // Convert device_plat_ to lowercase
+    std::string device_plat_lower = to_lower(device_plat_);
+
     // Get all the available platforms
     auto platforms = sycl::platform::get_platforms();
-    
-    // Look only for OpenCL platforms
+
+    // Iterate over all platforms and add devices.
     for (const auto& platform : platforms) {
-      if (platform.get_info<sycl::info::platform::name>().find(device_plat_) != std::string::npos) {
+        // Get the platform name and convert it to lowercase
+        std::string platform_name_lower = to_lower(platform.get_info<sycl::info::platform::name>());
+        if (platform_name_lower.find(device_plat_lower) != std::string::npos) {
             auto platform_devices = platform.get_devices();
             devices.insert(devices.end(), platform_devices.begin(), platform_devices.end());
         }
@@ -263,6 +269,7 @@ class SyclNetwork : public Network {
 
     //dpct::device_info deviceProp = {};
     //sycl_queue_->get_device().get_device_info(deviceProp);
+    size_t sharedMemPerBlockOptin = device_.get_info<sycl::info::device::local_mem_size>();
 
 
     if (fp16) {
@@ -307,20 +314,14 @@ class SyclNetwork : public Network {
     // ResidualBlock<DataType>::Eval)
     // TODO: fix res_block_fusing.
     if (kNumFilters % 32 == 0 && std::is_same<sycl::half, DataType>::value) {
-      use_res_block_winograd_fuse_opt_ = false;
+      use_res_block_winograd_fuse_opt_ = true;
     } else {
       use_res_block_winograd_fuse_opt_ = false;
     }
     // Override if set in backend-opts.
-#if  0
     if (!options.IsDefault<bool>("res_block_fusing")) {
       use_res_block_winograd_fuse_opt_ = options.Get<bool>("res_block_fusing");
     }
-#endif
-    /*
-    DPCT1005:86: The SYCL device version is different from CUDA Compute
-    Compatibility. You may need to rewrite this code.
-    */
 
     // 0. Check for SE.
     has_se_ = false;
@@ -401,12 +402,12 @@ class SyclNetwork : public Network {
         bool has_se = weights.residual[block].has_se;
         int se_k = (int)weights.residual[block].se.b1.size();
 
-        /*   
+           
         if (use_res_block_winograd_fuse_opt_) {
           auto layer = std::make_unique<ResidualBlock<DataType>>(
               getLastLayer(), kNumFilters, has_se, se_k,
               block == 0, block == (numBlocks_ - 1), act,
-              deviceProp.sharedMemPerBlockOptin);
+              sharedMemPerBlockOptin, *sycl_queue_);
           layer->LoadWeights0(&weights.residual[block].conv1.weights[0],
                               &weights.residual[block].conv1.biases[0],
                               scratch_mem_);
@@ -420,7 +421,7 @@ class SyclNetwork : public Network {
                                  &weights.residual[block].se.b2[0],
                                  scratch_mem_);
           network_.emplace_back(std::move(layer));
-        } else { */
+        } else { 
           auto conv1 = std::make_unique<FusedWinogradConvSELayer<DataType>>(
               getLastLayer(), kNumFilters, 8, 8, kNumFilters, act, true, false,
               false, 0, *sycl_queue_);
@@ -443,7 +444,7 @@ class SyclNetwork : public Network {
                                  &weights.residual[block].se.b2[0],
                                  scratch_mem_);
           network_.emplace_back(std::move(conv2));
-        //}
+        }
       }
       resi_last_ = getLastLayer();
     }
@@ -665,8 +666,9 @@ class SyclNetwork : public Network {
     
 
     float* opPol = io->op_policy_mem_gpu_;
-    float* opVal = io->op_value_mem_shared_;
+    float* opVal = (wdl_) ? io->op_value_mem_gpu_ : io->op_value_mem_shared_;
     float* opMov = io->op_moves_left_mem_shared_;
+    float* values = sycl::malloc_device<float>(max_batch_size_, io_sycl_queue_);
 
     
 
@@ -677,34 +679,24 @@ class SyclNetwork : public Network {
         use_res_block_winograd_fuse_opt_ ? tensor_mem[1] : tensor_mem[2];
 
     
-//#if DPCT_COMPAT_RT_VERSION >= 11000
+#if SYCL_LANGUAGE_VERSION >= 202001
     const int pre_transform_tensor_size =
         batchSize * numFilters_ * 8 * 8 * sizeof(DataType);
     const int transformed_tensor_size = pre_transform_tensor_size * 36 / 16;
     const int res_block_mem =
         transformed_tensor_size * 2 + pre_transform_tensor_size;
 
-    //cudaStreamAttrValue stream_attribute = {};
-    //stream_attribute.accessPolicyWindow.base_ptr = tensor_mem[2];
-    //stream_attribute.accessPolicyWindow.num_bytes = res_block_mem;
-    //stream_attribute.accessPolicyWindow.hitRatio = 1.0f;
-    //stream_attribute.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
-    //stream_attribute.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
+    if (allow_cache_opt_ && use_res_block_winograd_fuse_opt_ &&
+       (res_block_mem <= scratch_size_) && (res_block_mem <= l2_cache_size_)) {
+        //auto buffer_location_property = sycl::ext::oneapi::property::buffer_location{1};
 
-    //if (allow_cache_opt_ && use_res_block_winograd_fuse_opt_ &&
-    //    (res_block_mem <= scratch_size_) && (res_block_mem <= l2_cache_size_)) {
-      // we can use a single alloc to hold all the required tensors, and enable
-      // persistent L2 caching on it
-      /*
-      DPCT1007:87: Migration of cudaStreamSetAttribute is not supported.
-      */
-      //cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &stream_attribute);
+        //sycl::buffer<DataType> tensor_buffer(tensor_mem[0], 
+            //sycl::range<1>(res_block_mem / sizeof(DataType)), {buffer_location_property});
 
-     // enableCacheOpt = true;
-    //  skip_connection =
-    //      tensor_mem[2] + 2 * transformed_tensor_size / sizeof(DataType);
-   // }
-//#endif
+        enableCacheOpt = true;
+        skip_connection = tensor_mem[0] + 2 * transformed_tensor_size / sizeof(DataType);
+    }
+#endif
 
     int l = 0;
 
@@ -897,26 +889,38 @@ class SyclNetwork : public Network {
       // The next thread can start using the GPU now.
       lock_.unlock();
     }
-
+    
+    io_sycl_queue_.memcpy(values, io->op_value_mem_gpu_,  sizeof(float) * batchSize * 3);
+    io_sycl_queue_.wait();
+    
     if (wdl_) {
-      // Value softmax done cpu side.
-      for (int i = 0; i < batchSize; i++) {
-        float w = io->op_value_mem_shared_[3 * i + 0];
-        float d = io->op_value_mem_shared_[3 * i + 1];
-        float l = io->op_value_mem_shared_[3 * i + 2];
-        float m = std::max({w, d, l});
-        w = std::exp(w - m);
-        d = std::exp(d - m);
-        l = std::exp(l - m);
-        float sum = w + d + l;
-        w /= sum;
-        l /= sum;
-        d = 1.0f - w - l;
-        io->op_value_mem_shared_[3 * i + 0] = w;
-        io->op_value_mem_shared_[3 * i + 1] = d;
-        io->op_value_mem_shared_[3 * i + 2] = l;
-      }
+        sycl::range<1> nd{batchSize};
+        // Launch softmax kernel.
+        io_sycl_queue_.parallel_for<class SyclNetwork>(nd, [=](sycl::id<1> idx) {
+                float w = values[3 * idx + 0];
+                float d = values[3 * idx + 1];
+                float l = values[3 * idx + 2];
+                float m = sycl::max(sycl::max(w, d), l);
+                w = sycl::exp(w - m);
+                d = sycl::exp(d - m);
+                l = sycl::exp(l - m);
+                float sum = w + d + l;
+                w /= sum;
+                l /= sum;
+                d = 1.0f - w - l;
+                values[3 * idx + 0] = w;
+                values[3 * idx + 1] = d;
+                values[3 * idx + 2] = l;
+        }).wait_and_throw();
     }
+
+    // Copy value from device to host.
+    io_sycl_queue_.memcpy(io->op_value_mem_shared_, values, sizeof(float) * batchSize * 3);
+    io_sycl_queue_.wait();
+
+    // Free the allocated device memory
+    sycl::free(io->op_value_mem_gpu_, io_sycl_queue_);
+
   }
 
   ~SyclNetwork() {
@@ -952,6 +956,14 @@ class SyclNetwork : public Network {
      if (device_.is_cpu()) { return 47; }
     // Simple heuristic that seems to work for a wide range of GPUs.
     return 2 * compute_units_;
+  }
+  
+  // Function to convert a string to lowercase using std::tolower
+  std::string to_lower(const std::string& str) {
+        std::string lower_str = str;
+        std::transform(lower_str.begin(), lower_str.end(), lower_str.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+        return lower_str;
   }
 
   std::unique_ptr<NetworkComputation> NewComputation() override {
