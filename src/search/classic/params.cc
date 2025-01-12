@@ -621,7 +621,7 @@ SearchParams::SearchParams(const OptionsDict& options)
       kMiniBatchSize(options.Get<int>(kMiniBatchSizeId)),
       kMovesLeftMidpointMove(options.Get<float>(kMovesLeftMidpointMoveId)),
       kMovesLeftThreshold(options.Get<float>(kMovesLeftThresholdId)),
-      kMovesLeftSteepnessFactor(options.Get<float>(kMovesLeftSteepnessFactorId))
+      kMovesLeftSteepnessFactor(options.Get<float>(kMovesLeftSteepnessFactorId)),
       kDisplayCacheUsage(options.Get<bool>(kDisplayCacheUsageId)),
       kMaxConcurrentSearchers(options.Get<int>(kMaxConcurrentSearchersId)),
       kDrawScore(options.Get<float>(kDrawScoreId)),
