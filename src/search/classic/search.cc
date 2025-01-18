@@ -36,6 +36,7 @@
 #include <iterator>
 #include <sstream>
 #include <thread>
+#include <mutex>
 
 #include "search/classic/node.h"
 #include "neural/cache.h"
@@ -896,7 +897,7 @@ EdgeAndNode Search::GetBestRootChildWithTemperature(float temperature) const {
 void Search::StartThreads(size_t how_many) {
   Mutex::Lock lock(threads_mutex_);
   if (how_many == 0 && threads_.size() == 0) {
-    how_many = network_->GetThreads() + !network_->IsCpu();
+    how_many = network_->GetThreads();
   }
   thread_count_.store(how_many, std::memory_order_release);
   // First thread is a watchdog thread.
@@ -1054,13 +1055,25 @@ void Search::Abort() {
   LOGFILE << "Aborting search, if it is still active.";
 }
 
+/*
 void Search::Wait() {
   Mutex::Lock lock(threads_mutex_);
   while (!threads_.empty()) {
     threads_.back().join();
     threads_.pop_back();
   }
+}  */
+
+void Search::Wait() {
+  Mutex::Lock lock(threads_mutex_);
+  while (!threads_.empty()) {
+    if (threads_.back().joinable()) {
+      threads_.back().join();
+    }
+    threads_.pop_back();
+  }
 }
+
 
 void Search::CancelSharedCollisions() REQUIRES(nodes_mutex_) {
   for (auto& entry : shared_collisions_) {
@@ -1522,7 +1535,7 @@ int SearchWorker::WaitForTasks() {
 
 void SearchWorker::PickNodesToExtend(int collision_limit) {
   ResetTasks();
-  if (task_workers_ > 0 && !search_->network_->IsCpu()) {
+  if (task_workers_ > 0 /*&& !search_->network_->IsCpu()*/) {
     // While nothing is ready yet - wake the task runners so they are ready to
     // receive quickly.
     Mutex::Lock lock(picking_tasks_mutex_);

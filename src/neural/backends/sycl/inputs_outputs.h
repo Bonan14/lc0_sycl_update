@@ -20,6 +20,7 @@
 */
 
 #include <sycl/sycl.hpp>
+#include <mutex>
 #include "neural/network.h"
 #include "cuBlasContext.h"
 
@@ -27,7 +28,7 @@ namespace lczero {
 namespace sycldnn_backend {
 
 struct InputsOutputs {
-  InputsOutputs(int maxBatchSize, bool wdl, bool moves_left, sycl::queue& m_ct1,
+  InputsOutputs(int maxBatchSize, bool wdl, bool moves_left, sycl::queue &m_ct1,
                 size_t tensor_mem_size = 0, size_t scratch_size = 0,
                 bool cublasDisableTensorCores = false): q_ct1(m_ct1) {
   #ifdef USE_CUBLAS
@@ -42,6 +43,7 @@ struct InputsOutputs {
     op_policy_mem_gpu_ = malloc_device<float>(maxBatchSize * kNumOutputPolicy, q_ct1);
     op_value_mem_shared_ = malloc_host<float>(maxBatchSize * (wdl ? 3 : 1), q_ct1);
     op_value_mem_gpu_ = malloc_device<float>(maxBatchSize * (wdl ? 3 : 1), q_ct1);
+    //op_value_mem_gpu_copy = malloc_device<float>(maxBatchSize * (wdl ? 3 : 1), q_ct1);
 
     if (moves_left) {
       op_moves_left_mem_shared_ = malloc_host<float>(maxBatchSize, q_ct1);
@@ -60,32 +62,30 @@ struct InputsOutputs {
     }
   }
 
+/*
+Try wdl softmaxing here to help vs memory access errors
+*/
+
+  void SetOp_Value_Mem_Gpu(float* ptr) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    op_value_mem_gpu_ = ptr;
+  }
+
+  float* GetOp_Value_Mem_Gpu() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return op_value_mem_gpu_;
+  }
 
   ~InputsOutputs() {
-    /*
-    sycl::free(input_masks_mem_shared_, q_ct1);
+   /* sycl::free(input_masks_mem_shared_, q_ct1);
     sycl::free(input_val_mem_shared_, q_ct1);
     sycl::free(op_value_mem_shared_, q_ct1);
-    if (op_moves_left_mem_shared_ != nullptr)
-        sycl::free(op_moves_left_mem_shared_, q_ct1);
+    sycl::free(op_value_mem_gpu_, q_ct1);
     sycl::free(op_policy_mem_gpu_, q_ct1);
-
-    if (multi_stream_) {
-      for (auto mem : tensor_mem_) {
-        if (mem) 
-            sycl::free(mem, q_ct1);
-      }
-      if (scratch_mem_) 
-          sycl::free(scratch_mem_, q_ct1);
-      if (offset_pointers_) 
-          sycl::free(offset_pointers_, q_ct1);
-      if (head_offset_pointers_) {
-          sycl::free(head_offset_pointers_, q_ct1);
-      } 
-      //dpct::get_current_device().destroy_queue(stream_);
-      //cublas_ = nullptr;
-    } */
+    if (op_moves_left_mem_shared_ != nullptr)
+        sycl::free(op_moves_left_mem_shared_, q_ct1);*/
   }
+  
   uint64_t* input_masks_mem_shared_;
   float* input_val_mem_shared_;
   float* op_value_mem_shared_;
@@ -94,7 +94,7 @@ struct InputsOutputs {
   // GPU pointers for the above allocations.
   //uint64_t* input_masks_mem_gpu_;
   //float* input_val_mem_gpu_;
-  //float* op_value_mem_gpu_;
+  //float* op_value_mem_gpu_copy;
   //float* op_moves_left_mem_gpu_;
 
   // This is a seperate copy.
@@ -111,7 +111,9 @@ struct InputsOutputs {
   void** head_offset_pointers_ = nullptr;
 
   // cuda stream used to run the network
-  sycl::queue& q_ct1;
+  sycl::queue &q_ct1;
+  private:
+  mutable std::mutex mutex_; 
 };
 
 }  // namespace cudnn_backend

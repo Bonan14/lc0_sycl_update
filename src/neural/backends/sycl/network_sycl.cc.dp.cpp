@@ -22,6 +22,10 @@
 #define DPCT_COMPAT_RT_VERSION 12020
 
 #include <sycl/sycl.hpp>
+#include <sycl/ext/intel/fpga_extensions.hpp>
+#include <sycl/ext/oneapi/experimental/prefetch.hpp>
+#include <sycl/properties/all_properties.hpp>
+#include <sycl/usm.hpp>
 #include "dpct/dpct.hpp"
 #include <algorithm>
 #include <cassert>
@@ -609,10 +613,10 @@ class SyclNetwork : public Network {
 
     // pre-allocate one InputsOutputs object
     // The first call to allocate memory, create cublas,
-    // strem, etc takes really long (600 ms)
-    //CERR << "Creating Inputs Outputs. ";
+    // stream, etc takes really long (600 ms)
+    CERR << "Creating Inputs Outputs. ";
     std::unique_ptr<InputsOutputs> io = GetInputsOutputs();
-    //CERR << "Done loading network. ";
+    CERR << "Done loading network. ";
   }
 
   void forwardEval(InputsOutputs* io, int batchSize) {
@@ -627,7 +631,7 @@ class SyclNetwork : public Network {
     // Expand packed planes to full planes.
     uint64_t* ipDataMasks = io->input_masks_mem_shared_;
     float* ipDataValues = io->input_val_mem_shared_;
-    sycl::queue io_sycl_queue_ = io->q_ct1;
+    sycl::queue io_sycl_queue_;
 
     DataType* tensor_mem[3];
     void* scratch_mem;
@@ -642,16 +646,14 @@ class SyclNetwork : public Network {
       scratch_mem = io->scratch_mem_;
       offset_pointers = (DataType***)&io->offset_pointers_;
       head_offset_pointers = (DataType***)&io->head_offset_pointers_;
-      //stream = io->stream_;
-      //cublas = io->cublas_;
+      io_sycl_queue_ = io->q_ct1;
     } else {
       
       for (int i = 0; i < 3; i++) tensor_mem[i] = tensor_mem_[i];
       scratch_mem = scratch_mem_;
       offset_pointers = (DataType***)&offset_pointers_;
       head_offset_pointers = (DataType***)&head_offset_pointers_;
-      //stream = &dpct::get_default_queue();  // default stream
-      //cublas = cublas_;
+      io_sycl_queue_ = *sycl_queue_; // default stream
     }
 
     
@@ -666,9 +668,10 @@ class SyclNetwork : public Network {
     
 
     float* opPol = io->op_policy_mem_gpu_;
-    float* opVal = (wdl_) ? io->op_value_mem_gpu_ : io->op_value_mem_shared_;
+    float* opVal = io->GetOp_Value_Mem_Gpu();
     float* opMov = io->op_moves_left_mem_shared_;
-    float* values = sycl::malloc_device<float>(max_batch_size_, io_sycl_queue_);
+    //float* values = io->op_value_mem_gpu_copy;
+    
 
     
 
@@ -688,13 +691,8 @@ class SyclNetwork : public Network {
 
     if (allow_cache_opt_ && use_res_block_winograd_fuse_opt_ &&
        (res_block_mem <= scratch_size_) && (res_block_mem <= l2_cache_size_)) {
-        //auto buffer_location_property = sycl::ext::oneapi::property::buffer_location{1};
-
-        //sycl::buffer<DataType> tensor_buffer(tensor_mem[0], 
-            //sycl::range<1>(res_block_mem / sizeof(DataType)), {buffer_location_property});
-
         enableCacheOpt = true;
-        skip_connection = tensor_mem[0] + 2 * transformed_tensor_size / sizeof(DataType);
+        skip_connection = tensor_mem[2] + 2 * transformed_tensor_size / sizeof(DataType);
     }
 #endif
 
@@ -747,9 +745,54 @@ class SyclNetwork : public Network {
       spare1 = tensor_mem[0];
       spare2 = tensor_mem[2];
     }
+    
+/*#ifdef __INTEL_LLVM_COMPILER
+    // Intel-specific code block
+  if (enableCacheOpt) {
+    // Allocate new memory with Intel-specific hints for cache optimization
+    //auto placement_property = sycl::usm::placement(sycl::usm::alloc::device);
+    DataType* new_tensor_mem[3] = sycl::malloc_device<DataType>(tensor_mem, io_sycl_queue_);   
+    // Copy existing data to new memory if necessary
+    // Note: This assumes tensor_mem[0] has data we want to preserve
+    io_sycl_queue_.memcpy(new_tensor_mem, tensor_mem, 3 * sizeof(DataType)).wait();
+    // Free old memory if we're replacing tensor_mem[0]
+    sycl::free(tensor_mem, io_sycl_queue_);
+    // Update tensor_mem with new allocation
+    for (int i = 0; i < 3; i++) tensor_mem[i] = new_tensor_mem[i];
+    // Prefetch to guide data into cache
+    sycl::ext::oneapi::experimental::prefetch(tensor_mem, 3 * sizeof(DataType), io_sycl_queue_);
+    // Simulate cache reset or flush by ensuring data is written back
+    io_sycl_queue_.memcpy(tensor_mem, tensor_mem, 3 * sizeof(DataType)).wait();
+  }
+#endif*/
 
+#ifdef __INTEL_LLVM_COMPILER
+// Intel-specific code block
+if (enableCacheOpt) {
+    // Allocate new memory with Intel-specific hints for cache optimization
+    int num_elements = 3;
+    DataType* new_tensor_mem[3];
+    for (int i = 0; i < 3; i++) {
+        new_tensor_mem[i] = sycl::malloc_device<DataType>(num_elements, io_sycl_queue_);
+        // Copy existing data to new memory if necessary
+        io_sycl_queue_.memcpy(new_tensor_mem[i], tensor_mem[i], num_elements * sizeof(DataType)).wait();
+        // Free old memory if we're replacing tensor_mem
+        sycl::free(tensor_mem[i], io_sycl_queue_);
+        // Update tensor_mem with new allocation
+        tensor_mem[i] = new_tensor_mem[i];
+        // Prefetch to guide data into cache
+        sycl::ext::oneapi::experimental::prefetch(tensor_mem[i], num_elements * sizeof(DataType));
+        // Simulate cache reset or flush by ensuring data is written back
+        io_sycl_queue_.memcpy(tensor_mem[i], tensor_mem[i], num_elements * sizeof(DataType)).wait();
+    }
+}
+#endif
+
+
+    ///////////////
     // Policy head.
-   
+    ///////////////
+    
     if (attn_policy_) {
       
       network_[l++]->Eval(
@@ -884,19 +927,29 @@ class SyclNetwork : public Network {
         io_sycl_queue_.wait();
     } else {
         io_sycl_queue_.wait();
-      //ReportCUDAErrors(
-        //  DPCT_CHECK_ERROR(dpct::get_current_device().queues_wait_and_throw()));
-      // The next thread can start using the GPU now.
       lock_.unlock();
     }
-    
-    io_sycl_queue_.memcpy(values, io->op_value_mem_gpu_,  sizeof(float) * batchSize * 3);
-    io_sycl_queue_.wait();
+
+    float* values = io->GetOp_Value_Mem_Gpu();
+    int originalBatchSize = batchSize;
     
     if (wdl_) {
-        sycl::range<1> nd{batchSize};
-        // Launch softmax kernel.
-        io_sycl_queue_.parallel_for<class SyclNetwork>(nd, [=](sycl::id<1> idx) {
+    // Define localsize for range (e.g., can be 4, 8, 16 or 32 work-items per work-group)
+    int localSize = 4;
+    // Calculate global range based on batchsize
+    // Add padding to batchsize.
+    int batchSize_ = DivUp(batchSize, localSize);
+    // Create nd_range
+    sycl::range<1> globalRange(batchSize_);
+    sycl::range<1> localRange(localSize);
+    sycl::nd_range<1> nd(globalRange * localRange, localRange);
+    // Launch kernel with nd_range
+    io_sycl_queue_.parallel_for<class SyclNetwork>(nd, [=](sycl::nd_item<1> item) {
+            // Get index of work-item(current thread).
+            int idx = item.get_local_id(0) +
+              item.get_local_range(0) * item.get_group(0);
+            // Bounds check.
+            if (idx < originalBatchSize) {
                 float w = values[3 * idx + 0];
                 float d = values[3 * idx + 1];
                 float l = values[3 * idx + 2];
@@ -911,16 +964,11 @@ class SyclNetwork : public Network {
                 values[3 * idx + 0] = w;
                 values[3 * idx + 1] = d;
                 values[3 * idx + 2] = l;
-        }).wait_and_throw();
+            }
+        }).wait();
     }
-
-    // Copy value from device to host.
-    io_sycl_queue_.memcpy(io->op_value_mem_shared_, values, sizeof(float) * batchSize * 3);
-    io_sycl_queue_.wait();
-
-    // Free the allocated device memory
-    sycl::free(io->op_value_mem_gpu_, io_sycl_queue_);
-
+    // Copy values from device to host.
+    io_sycl_queue_.memcpy(io->op_value_mem_shared_, io->GetOp_Value_Mem_Gpu(), sizeof(float) * batchSize * 3).wait();
   }
 
   ~SyclNetwork() {
@@ -950,7 +998,7 @@ class SyclNetwork : public Network {
   bool IsCpu() const override { return device_.is_cpu(); }
   
   // 2 threads for cpu and 1 + total_gpu's for the multiple gpu's. 
-  int GetThreads() const override { return device_.is_cpu() ? 1 : 1 + total_gpus_; }
+  int GetThreads() const override { return device_.is_cpu() ? 1 : int(1 + total_gpus_); }
   
   int GetMiniBatchSize() const override {
      if (device_.is_cpu()) { return 47; }
@@ -971,6 +1019,27 @@ class SyclNetwork : public Network {
                                                               moves_left_);
   }
 
+std::unique_ptr<InputsOutputs> GetInputsOutputs() {
+    std::lock_guard<std::mutex> lock(inputs_outputs_lock_);
+
+    if (free_inputs_outputs_.empty()) {
+        return std::make_unique<InputsOutputs>(
+            max_batch_size_, wdl_, moves_left_, *sycl_queue_, tensor_mem_size_, scratch_size_,
+            !has_tensor_cores_ && std::is_same<sycl::half, DataType>::value);
+    } else {
+        std::unique_ptr<InputsOutputs> resource = std::move(free_inputs_outputs_.front());
+        free_inputs_outputs_.pop_front();
+        return resource;
+    }
+}
+
+void ReleaseInputsOutputs(std::unique_ptr<InputsOutputs> resource) {
+    std::lock_guard<std::mutex> lock(inputs_outputs_lock_);
+    free_inputs_outputs_.push_back(std::move(resource));
+}
+
+
+/*
   std::unique_ptr<InputsOutputs> GetInputsOutputs() {
     std::lock_guard<std::mutex> lock(inputs_outputs_lock_);
     if (free_inputs_outputs_.empty()) {
@@ -989,7 +1058,7 @@ class SyclNetwork : public Network {
     std::lock_guard<std::mutex> lock(inputs_outputs_lock_);
     free_inputs_outputs_.push_back(std::move(resource));
   }
-
+*/
 
  private:
   const NetworkCapabilities capabilities_;
@@ -1086,6 +1155,7 @@ SyclNetworkComputation<DataType>::SyclNetworkComputation(
 template <typename DataType>
 SyclNetworkComputation<DataType>::~SyclNetworkComputation() {
   network_->ReleaseInputsOutputs(std::move(inputs_outputs_));
+  inputs_outputs_->~InputsOutputs();
 }
 
 template <typename DataType>
