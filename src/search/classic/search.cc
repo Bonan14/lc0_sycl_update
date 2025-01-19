@@ -1085,12 +1085,14 @@ void Search::CancelSharedCollisions() REQUIRES(nodes_mutex_) {
 }
 
 Search::~Search() {
+  //FireStopInternal();
   Abort();
   Wait();
   {
     SharedMutex::Lock lock(nodes_mutex_);
     CancelSharedCollisions();
   }
+  LOGFILE << "IsSearchActive(Destroyer): " << IsSearchActive();
   LOGFILE << "Search destroyed.";
 }
 
