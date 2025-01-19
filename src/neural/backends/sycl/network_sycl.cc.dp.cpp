@@ -890,33 +890,27 @@ class SyclNetwork : public Network {
       lock_.unlock();
     }
     
-    io_sycl_queue_.memcpy(values, io->op_value_mem_gpu_,  sizeof(float) * batchSize * 3);
+    io_sycl_queue_.memcpy(io->op_value_mem_shared_, io->op_value_mem_gpu_,  sizeof(float) * batchSize * 3);
     io_sycl_queue_.wait();
     
     if (wdl_) {
-        sycl::range<1> nd{batchSize};
-        // Launch softmax kernel.
-        io_sycl_queue_.parallel_for<class SyclNetwork>(nd, [=](sycl::id<1> idx) {
-                float w = values[3 * idx + 0];
-                float d = values[3 * idx + 1];
-                float l = values[3 * idx + 2];
-                float m = sycl::max(sycl::max(w, d), l);
-                w = sycl::exp(w - m);
-                d = sycl::exp(d - m);
-                l = sycl::exp(l - m);
-                float sum = w + d + l;
-                w /= sum;
-                l /= sum;
-                d = 1.0f - w - l;
-                values[3 * idx + 0] = w;
-                values[3 * idx + 1] = d;
-                values[3 * idx + 2] = l;
-        }).wait_and_throw();
+       for (int idx; idx < batchSize; idx++) {
+        float w = io->op_value_mem_shared_[3 * idx + 0];
+        float d = io->op_value_mem_shared_[3 * idx + 1];
+        float l = io->op_value_mem_shared_[3 * idx + 2];
+        float m = sycl::max(sycl::max(w, d), l);
+        w = sycl::exp(w - m);
+        d = sycl::exp(d - m);
+        l = sycl::exp(l - m);
+        float sum = w + d + l;
+        w /= sum;
+        l /= sum;
+        d = 1.0f - w - l;
+        io->op_value_mem_shared_[3 * idx + 0] = w;
+        io->op_value_mem_shared_[3 * idx + 1] = d;
+        io->op_value_mem_shared_[3 * idx + 2] = l;
+      }
     }
-
-    // Copy value from device to host.
-    io_sycl_queue_.memcpy(io->op_value_mem_shared_, values, sizeof(float) * batchSize * 3);
-    io_sycl_queue_.wait();
 
     // Free the allocated device memory
     sycl::free(io->op_value_mem_gpu_, io_sycl_queue_);
