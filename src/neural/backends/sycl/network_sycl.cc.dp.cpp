@@ -666,7 +666,7 @@ class SyclNetwork : public Network {
     
 
     float* opPol = io->op_policy_mem_gpu_;
-    float* opVal = (wdl_) ? io->op_value_mem_gpu_ : io->op_value_mem_shared_;
+    float* opVal = io->op_value_mem_gpu_;
     float* opMov = io->op_moves_left_mem_shared_;
     float* values = sycl::malloc_device<float>(max_batch_size_, io_sycl_queue_);
 
@@ -890,9 +890,6 @@ class SyclNetwork : public Network {
       lock_.unlock();
     }
     
-    io_sycl_queue_.memcpy(io->op_value_mem_shared_, io->op_value_mem_gpu_,  sizeof(float) * batchSize * 3);
-    io_sycl_queue_.wait();
-    
     if (wdl_) {
        for (int idx; idx < batchSize; idx++) {
         float w = io->op_value_mem_shared_[3 * idx + 0];
@@ -911,9 +908,6 @@ class SyclNetwork : public Network {
         io->op_value_mem_shared_[3 * idx + 2] = l;
       }
     }
-
-    // Free the allocated device memory
-    sycl::free(io->op_value_mem_gpu_, io_sycl_queue_);
 
   }
 
