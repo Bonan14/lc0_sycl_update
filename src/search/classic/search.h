@@ -211,7 +211,7 @@ class Search {
 // within one thread, have to split into stages.
 class SearchWorker {
  public:
-  SearchWorker(Search* search, const SearchParams& params)
+  SearchWorker(Search* search, const SearchParams& params, int id)
       : search_(search),
         history_(search_->played_history_),
         params_(params),
@@ -219,14 +219,14 @@ class SearchWorker {
     task_workers_ = params.GetTaskWorkersPerSearchWorker();
     if (task_workers_ < 0) {
       if (search_->backend_attributes_.runs_on_cpu) {
-        task_workers_ = 0;
-      } else {
-        int working_threads = std::max(
-            search_->thread_count_.load(std::memory_order_acquire) - 1, 1);
-        task_workers_ = std::min(
-            std::thread::hardware_concurrency() / working_threads - 1, 4U);
-      }
+         task_workers_ = 0;
+        } else {
+           int working_threads = std::max(
+           search_->thread_count_.load(std::memory_order_acquire) - 1, 1);
+           task_workers_ = std::min(static_cast<unsigned int>(id / working_threads), 4U);
+        }
     }
+
     for (int i = 0; i < task_workers_; i++) {
       task_workspaces_.emplace_back();
       task_threads_.emplace_back([this, i]() { this->RunTasks(i); });
@@ -254,7 +254,7 @@ class SearchWorker {
   }
 
   // Runs iterations while needed.
-  void RunBlocking() {
+  void RunBlocking(size_t threads) {
     LOGFILE << "Started search thread.";
     try {
       // A very early stop may arrive before this point, so the test is at the

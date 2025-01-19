@@ -911,28 +911,34 @@ EdgeAndNode Search::GetBestRootChildWithTemperature(float temperature) const {
 
 void Search::StartThreads(size_t how_many) {
   Mutex::Lock lock(threads_mutex_);
-  if (how_many == 0 && threads_.size() == 0) {
-    how_many = backend_attributes_.suggested_num_search_threads +
-               !backend_attributes_.runs_on_cpu;
-  }
-  thread_count_.store(how_many, std::memory_order_release);
-  // First thread is a watchdog thread.
-  if (threads_.size() == 0) {
+
+  // Ensure the watchdog thread is created first.
+  if (threads_.empty()) {
+    // First thread is a watchdog thread.
     threads_.emplace_back([this]() { WatchdogThread(); });
+
+    if (how_many == 0) {
+      how_many = backend_attributes_.suggested_num_search_threads +
+                 !backend_attributes_.runs_on_cpu;
+      thread_count_.store(how_many, std::memory_order_release);
+    }
   }
+
   // Start working threads.
   for (size_t i = 0; i < how_many; i++) {
-    threads_.emplace_back([this]() {
-      SearchWorker worker(this, params_);
-      worker.RunBlocking();
+    threads_.emplace_back([this, i]() {
+      SearchWorker worker(this, params_, i);
+      worker.RunBlocking(i);
     });
   }
+
   LOGFILE << "Search started. "
           << std::chrono::duration_cast<std::chrono::milliseconds>(
                  std::chrono::steady_clock::now() - start_time_)
                  .count()
           << "ms already passed.";
 }
+
 
 void Search::RunBlocking(size_t threads) {
   StartThreads(threads);
@@ -1016,7 +1022,7 @@ void Search::PopulateCommonIterationStats(IterationStats* stats) {
   }
 }
 
-void Search::WatchdogThread() {
+/*void Search::WatchdogThread() {
   LOGFILE << "Start a watchdog thread.";
   StoppersHints hints;
   IterationStats stats;
@@ -1047,7 +1053,46 @@ void Search::WatchdogThread() {
         [this]() { return stop_.load(std::memory_order_acquire); });
   }
   LOGFILE << "End a watchdog thread.";
+}*/
+
+void Search::WatchdogThread() {
+  LOGFILE << "Start a watchdog thread.";
+  StoppersHints hints;
+  IterationStats stats;
+  constexpr auto kInitialMaxWaitTimeMs = 100;
+  constexpr auto kInitialMinWaitTimeMs = 1;
+  bool first_iteration = true;
+
+  while (true) {
+    PopulateCommonIterationStats(&stats);
+    MaybeTriggerStop(stats, &hints);
+    MaybeOutputInfo();
+    int thresold = stats.nodes_since_movestart;
+    Mutex::Lock lock(counters_mutex_);
+    // Only exit when bestmove is responded. It may happen that search threads
+    // already all exited, and we need at least one thread that can do that.
+    if (bestmove_is_sent_) break;
+    auto remaining_time = hints.GetEstimatedRemainingTimeMs();
+    if (remaining_time > kInitialMaxWaitTimeMs) remaining_time = kInitialMaxWaitTimeMs;
+    if (remaining_time < kInitialMinWaitTimeMs) remaining_time = kInitialMinWaitTimeMs;
+    // Adjust wait times dynamically based on system state (example condition).
+    if (stats.num_losing_edges == thresold
+        && remaining_time != 1) {
+      remaining_time *= 2;  // Adjust as needed.
+    }
+    if (first_iteration) {
+        LOGFILE << "Watchdog thread sleeping for " << remaining_time << " ms.";
+        first_iteration = false;
+    }
+    watchdog_cv_.wait_for(
+        lock.get_raw(), std::chrono::milliseconds(remaining_time),
+        [this]() { return stop_.load(std::memory_order_acquire); });
+
+    // Perform additional checks or adjustments here if needed.
+  }
+  LOGFILE << "End a watchdog thread.";
 }
+
 
 void Search::FireStopInternal() {
   stop_.store(true, std::memory_order_release);

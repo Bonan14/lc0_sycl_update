@@ -41,7 +41,7 @@ struct InputsOutputs {
     op_policy_mem_ = malloc_host<float>(maxBatchSize * kNumOutputPolicy, q_ct1);
     op_policy_mem_gpu_ = malloc_device<float>(maxBatchSize * kNumOutputPolicy, q_ct1);
     op_value_mem_shared_ = malloc_host<float>(maxBatchSize * (wdl ? 3 : 1), q_ct1);
-    op_value_mem_gpu_ = malloc_device<float>(maxBatchSize * (wdl ? 3 : 1), q_ct1);
+    //op_value_mem_gpu_ = malloc_device<float>(maxBatchSize * (wdl ? 3 : 1), q_ct1);
 
     if (moves_left) {
       op_moves_left_mem_shared_ = malloc_host<float>(maxBatchSize, q_ct1);
@@ -99,7 +99,7 @@ struct InputsOutputs {
 
   // This is a seperate copy.
   float* op_policy_mem_gpu_;
-  float* op_value_mem_gpu_;
+  //float* op_value_mem_gpu_;
   float* op_policy_mem_;
 
   // memory needed to run the network owned by InputsOutputs when multi_stream

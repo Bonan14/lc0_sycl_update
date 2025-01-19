@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <mutex>
 
 #include "neural/encoder.h"
 #include "neural/shared_params.h"
@@ -86,6 +87,7 @@ class NetworkAsBackendComputation : public BackendComputation {
 
   AddInputResult AddInput(const EvalPosition& pos,
                           EvalResultPtr result) override {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
     int transform;
     const size_t idx = entries_.emplace_back(Entry{
         .input = EncodePositionForNN(backend_->input_format_, pos.pos, 8,
@@ -98,6 +100,7 @@ class NetworkAsBackendComputation : public BackendComputation {
   }
 
   void ComputeBlocking() override {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
     for (auto& entry : entries_) computation_->AddInput(std::move(entry.input));
     computation_->ComputeBlocking();
     for (size_t i = 0; i < entries_.size(); ++i) {
@@ -142,6 +145,7 @@ class NetworkAsBackendComputation : public BackendComputation {
   NetworkAsBackend* backend_;
   std::unique_ptr<NetworkComputation> computation_;
   AtomicVector<Entry> entries_;
+  std::mutex entries_mutex_;
 };
 
 std::unique_ptr<BackendComputation> NetworkAsBackend::CreateComputation() {
