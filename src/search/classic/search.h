@@ -58,8 +58,6 @@ class Search {
          const OptionsDict& options, NNCache* cache,
          SyzygyTablebase* syzygy_tb);
 
-  ~Search();
-
   // Starts worker threads and returns immediately.
   void StartThreads(size_t how_many);
 
@@ -98,6 +96,8 @@ class Search {
 
   // Returns NN eval for a given node from cache, if that node is cached.
   NNCacheLock GetCachedNNEval(const Node* node) const;
+  
+  ~Search();
 
  private:
   // Computes the best move, maybe with temperature (according to the settings).
@@ -262,9 +262,10 @@ class SearchWorker {
       // A very early stop may arrive before this point, so the test is at the
       // end to ensure at least one iteration runs before exiting.
       do {
+        LOGFILE << "IsSearchActive: " << search_->IsSearchActive();
         ExecuteOneIteration();
-      } while (search_->IsSearchActive());
-    } catch (std::exception& e) {
+       } while (search_->IsSearchActive());
+     } catch (std::exception& e) {
       std::cerr << "Unhandled exception in worker thread: " << e.what()
                 << std::endl;
       abort();
