@@ -627,7 +627,7 @@ class SyclNetwork : public Network {
     // Expand packed planes to full planes.
     uint64_t* ipDataMasks = io->input_masks_mem_shared_;
     float* ipDataValues = io->input_val_mem_shared_;
-    sycl::queue io_sycl_queue_ = io->q_ct1;
+    sycl::queue io_sycl_queue_;
 
     DataType* tensor_mem[3];
     void* scratch_mem;
@@ -642,6 +642,7 @@ class SyclNetwork : public Network {
       scratch_mem = io->scratch_mem_;
       offset_pointers = (DataType***)&io->offset_pointers_;
       head_offset_pointers = (DataType***)&io->head_offset_pointers_;
+      io_sycl_queue_ = io->q_ct1;
       //stream = io->stream_;
       //cublas = io->cublas_;
     } else {
@@ -650,6 +651,7 @@ class SyclNetwork : public Network {
       scratch_mem = scratch_mem_;
       offset_pointers = (DataType***)&offset_pointers_;
       head_offset_pointers = (DataType***)&head_offset_pointers_;
+      io_sycl_queue_ = *sycl_queue_;
       //stream = &dpct::get_default_queue();  // default stream
       //cublas = cublas_;
     }
@@ -666,7 +668,7 @@ class SyclNetwork : public Network {
     
 
     float* opPol = io->op_policy_mem_gpu_;
-    float* opVal = io->op_value_mem_gpu_;
+    float* opVal = io->op_value_mem_shared_;
     float* opMov = io->op_moves_left_mem_shared_;
     float* values = sycl::malloc_device<float>(max_batch_size_, io_sycl_queue_);
 
