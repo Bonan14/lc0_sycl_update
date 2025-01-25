@@ -23,6 +23,7 @@
 #include <mutex>
 #include "neural/network.h"
 #include "cuBlasContext.h"
+#include "utils/mutex.h"
 
 namespace lczero {
 namespace sycldnn_backend {
@@ -66,7 +67,7 @@ struct InputsOutputs {
 Try wdl softmaxing here to help vs memory access errors
 */
 
-  void SetOp_Value_Mem_Gpu(float* ptr) {
+  /*void SetOp_Value_Mem_Gpu(float* ptr) {
     std::lock_guard<std::mutex> guard(mutex_);
     op_value_mem_gpu_ = ptr;
   }
@@ -74,6 +75,20 @@ Try wdl softmaxing here to help vs memory access errors
   float* GetOp_Value_Mem_Gpu() const {
     std::lock_guard<std::mutex> guard(mutex_);
     return op_value_mem_gpu_;
+  }*/
+  
+  float* GetOp_Value_Mem_R() const {
+  mutex_.lock(); // Acquire shared writer lock
+  float* result = op_value_mem_gpu_;
+  mutex_.unlock(); // Release the lock
+  return result;
+  }
+  
+  float* GetOp_Value_Mem_W() const {
+  mutex_.lock_shared(); // Acquire shared reader lock
+  float* result = op_value_mem_gpu_;
+  mutex_.unlock_shared(); // Release the lock
+  return result;
   }
 
   ~InputsOutputs() {
@@ -113,7 +128,7 @@ Try wdl softmaxing here to help vs memory access errors
   // cuda stream used to run the network
   sycl::queue &q_ct1;
   private:
-  mutable std::mutex mutex_; 
+  mutable lczero::RpSharedMutex mutex_; 
 };
 
 }  // namespace cudnn_backend

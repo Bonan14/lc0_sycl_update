@@ -668,7 +668,7 @@ class SyclNetwork : public Network {
     
 
     float* opPol = io->op_policy_mem_gpu_;
-    float* opVal = io->GetOp_Value_Mem_Gpu();
+    float* opVal = io->GetOp_Value_Mem_W();
     float* opMov = io->op_moves_left_mem_shared_;
     //float* values = io->op_value_mem_gpu_copy;
     
@@ -930,7 +930,7 @@ if (enableCacheOpt) {
       lock_.unlock();
     }
 
-    float* values = io->GetOp_Value_Mem_Gpu();
+    float* values = io->GetOp_Value_Mem_W();
     int originalBatchSize = batchSize;
     
     if (wdl_) {
@@ -968,7 +968,7 @@ if (enableCacheOpt) {
         }).wait();
     }
     // Copy values from device to host.
-    io_sycl_queue_.memcpy(io->op_value_mem_shared_, io->GetOp_Value_Mem_Gpu(), sizeof(float) * batchSize * 3).wait();
+    io_sycl_queue_.memcpy(io->op_value_mem_shared_, io->GetOp_Value_Mem_R(), sizeof(float) * batchSize * 3).wait();
   }
 
   ~SyclNetwork() {
