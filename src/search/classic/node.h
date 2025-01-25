@@ -553,6 +553,12 @@ template <bool is_const>
 class VisitedNode_Iterator {
  public:
 
+  using difference_type = std::ptrdiff_t;
+  using value_type = VisitedNode_Iterator;
+  using pointer = value_type*;
+  using reference = value_type&;
+  using iterator_category = std::forward_iterator_tag;
+
   // Creates "end()" iterator.
   VisitedNode_Iterator() {}
 
