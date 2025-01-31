@@ -80,7 +80,7 @@ typedef uint64_t Key;
 
 constexpr const char* kSuffix[] = {".rtbw", ".rtbm", ".rtbz"};
 constexpr uint32_t kMagic[] = {0x5d23e871, 0x88ac504b, 0xa50c66d7};
-enum { WDL, DTM, DTZ };
+//enum { WDL, DTM, DTZ };
 
 enum { PIECE_ENC, FILE_ENC, RANK_ENC };
 
@@ -1503,7 +1503,8 @@ WDLScore SyzygyTablebase::search(const Position& pos, ProbeState* result) {
     }
     move_count++;
     auto new_pos = Position(pos, move);
-    value = static_cast<WDLScore>(-search(new_pos, result));
+    value = static_cast<WDLScore>(-search<false>(new_pos, result));
+    new_pos = pos.GetBoard(); // Undo move.
     if (*result == FAIL) return WDL_DRAW;
     if (value > best_value) {
       best_value = value;
@@ -1525,7 +1526,7 @@ WDLScore SyzygyTablebase::search(const Position& pos, ProbeState* result) {
   } else {
     int raw_result = static_cast<int>(ProbeState::OK);
     value = static_cast<WDLScore>(
-        impl_->probe_wdl_table(pos.GetBoard(), &raw_result));
+        impl_->probe_wdl_table<WDL>(pos.GetBoard(), &raw_result));
     *result = static_cast<ProbeState>(raw_result);
     if (*result == FAIL) return WDL_DRAW;
   }
@@ -1681,30 +1682,117 @@ bool SyzygyTablebase::root_probe(const Position& pos, bool has_repeated,
 // This is a fallback for the case that some or all DTZ tables are missing.
 //
 // A return value false indicates that not all probes were successful.
-bool SyzygyTablebase::root_probe_wdl(const Position& pos,
-                                     std::vector<Move>* safe_moves) {
-  static const int WDL_to_rank[] = {-1000, -899, 0, 899, 1000};
-  auto root_moves = pos.GetBoard().GenerateLegalMoves();
-  ProbeState result;
-  std::vector<int> ranks;
-  ranks.reserve(root_moves.size());
-  int best_rank = -1000;
-  // Probe and rank each move
-  for (auto& m : root_moves) {
-    Position nextPos = Position(pos, m);
-    const WDLScore wdl = static_cast<WDLScore>(-probe_wdl(nextPos, &result));
-    if (result == FAIL) return false;
-    ranks.push_back(WDL_to_rank[wdl + 2]);
-    if (ranks.back() > best_rank) best_rank = ranks.back();
-  }
-  // Disable all but the equal best moves.
-  int counter = 0;
-  for (auto& m : root_moves) {
-    if (ranks[counter] == best_rank) {
-      safe_moves->push_back(m);
+bool SyzygyTablebase::root_probe_wdl(const Position& pos, std::vector<Move>* safe_moves) {
+    static const int WDL_to_rank[] = {-900, -800, 0, 800, 900};
+
+    auto root_moves = pos.GetBoard().GenerateLegalMoves();
+    ProbeState result;
+    std::vector<int> ranks;
+    ranks.reserve(root_moves.size());
+    int best_rank = -900;
+
+    // Probe and rank each move
+    for (const auto& move : root_moves) {
+        Position nextPos(pos, move);
+        const WDLScore wdl = static_cast<WDLScore>(-probe_wdl<WDL>(nextPos, &result));
+
+        // Check for immediate checkmate
+        if (nextPos.GetBoard().GenerateLegalMoves().empty() && nextPos.GetBoard().IsUnderCheck()) {
+            ranks.push_back(-CHECKMATE_SCORE); // Negative because it's a loss for the current player
+        } else {
+            ranks.push_back(WDL_to_rank[wdl + 2]);
+        }
+
+        // Track the best rank
+        if (ranks.back() > best_rank) {
+            best_rank = ranks.back();
+        }
     }
-    counter++;
-  }
-  return true;
+
+    // Filter moves: keep only those with the best rank
+    for (size_t i = 0; i < root_moves.size(); ++i) {
+        if (ranks[i] >= best_rank) {
+            safe_moves->push_back(root_moves[i]);
+        }
+    }
+
+    return true;
 }
+
+int SyzygyTablebase::evaluate_move(const Position& pos, const Move& move) {
+    return evaluate_position(pos, move, false);
+}
+
+int SyzygyTablebase::evaluate_root(const Position& pos, const Move& move) {
+    return evaluate_position(pos, move, true);
+}
+
+int SyzygyTablebase::evaluate_position(const Position& pos, const Move& move, bool is_root) {
+    Position nextPos(pos, move);
+    const ChessBoard& board = nextPos.GetBoard();
+    int raw_result = static_cast<int>(ProbeState::OK);
+    ProbeState result;
+    int move_score = DEFAULT_SCORE;
+
+    // Calculate the WDL rank for the given move
+    const WDLScore wdl = is_root ? static_cast<WDLScore>(-probe_wdl<WDL>(nextPos, &result))
+                                 : static_cast<WDLScore>(-impl_->probe_wdl_table<WDL>(board, &raw_result));
+                                 
+    //if (!is_root) result = static_cast<ProbeState>(raw_result);
+
+    if (wdl) {
+        move_score = WDL_Rank[wdl + 2];
+    } else {
+        move_score = DEFAULT_SCORE;
+    }
+    
+    // Check for checkmate
+    if (board.GenerateLegalMoves().empty() && board.IsUnderCheck()) {
+        move_score = -CHECKMATE_SCORE;
+        //return move_score;
+    }
+    
+    // If no immediate terminal condition is found, use recursive evaluation
+    /*if (move_score != std::abs(CHECKMATE_SCORE)) {
+        move_score = evaluate_recursive(nextPos, 6); // Pos to eval with 6-ply lookahead
+    }*/
+
+    return move_score;
+}
+
+int SyzygyTablebase::evaluate_recursive(const Position& pos, int depth) { 
+  int best_score = DEFAULT_SCORE;
+  const ChessBoard& board = pos.GetBoard();
+  auto legal_moves = board.GenerateLegalMoves();
+    
+  for (auto move : legal_moves) {
+    Position next_pos(pos, move);
+    const ChessBoard& board_ = next_pos.GetBoard();
+    int raw_result = static_cast<int>(ProbeState::OK);
+    ProbeState state;
+    // Base cases
+    if (depth > 0) {
+        // Fall back to tablebase probe for leaf nodes
+        const WDLScore wdl = static_cast<WDLScore>(impl_->probe_wdl_table(board_, &raw_result));
+        state = static_cast<ProbeState>(raw_result);
+        if (wdl) best_score = WDL_Rank[wdl + 2];
+        best_score = DEFAULT_SCORE; // Default if no tablebase info
+    
+        // Terminal node check
+        if (board_.GenerateLegalMoves().empty()) {
+          board_.IsUnderCheck() ? best_score = CHECKMATE_SCORE : best_score = DEFAULT_SCORE;
+          return best_score;
+         }
+        auto moves = board_.GenerateLegalMoves();
+        for (auto move_ : moves) {
+            Position newPos(next_pos, move_);
+            int score = -evaluate_recursive(newPos, depth - 1);
+            best_score = score;
+        }
+    }
+  }
+
+    return best_score;
+}
+
 }  // namespace lczero

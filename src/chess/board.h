@@ -90,6 +90,11 @@ class ChessBoard {
   bool ApplyMove(Move move);
   // Checks if the square is under attack from "theirs" (black).
   bool IsUnderAttack(BoardSquare square) const;
+  
+  void MakeMove(const Move& move);
+  
+  bool IsCheck(const Move& move);
+  
   // Generates the king attack info used for legal move detection.
   KingAttackInfo GenerateKingAttackInfo() const;
   // Checks if "our" (white) king is under check.

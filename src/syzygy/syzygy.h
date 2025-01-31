@@ -55,6 +55,13 @@ enum ProbeState {
 
 class SyzygyTablebaseImpl;
 
+enum { 
+    WDL,
+    DTM,
+    DTZ 
+};
+
+
 // Provides methods to load and probe syzygy tablebases.
 // Thread safe methods are thread safe subject to the non-thread sfaety
 // conditions of the init method.
@@ -97,10 +104,20 @@ class SyzygyTablebase {
   // Returns false if the position is not in the tablebase.
   // Safe moves are added to the safe_moves output paramater.
   bool root_probe_wdl(const Position& pos, std::vector<Move>* safe_moves);
+  
+  int evaluate_move(const Position& pos, const Move& move);
+  
+  int evaluate_root(const Position& pos, const Move& move);
 
  private:
   template <bool CheckZeroingMoves = false>
   WDLScore search(const Position& pos, ProbeState* result);
+  int evaluate_position(const Position& pos, const Move& move, bool is_root);
+  int evaluate_recursive(const Position& pos, int depth);
+  static constexpr int WDL_Rank[] = {-900, -800, 1, 800, 900};
+  static constexpr int DEFAULT_SCORE = 1;
+  static constexpr int CHECKMATE_SCORE = 1000;
+  static constexpr int ZEROING_BONUS = 50;
 
   std::string paths_;
   // Caches the max_cardinality from the impl, as max_cardinality may be a hot
