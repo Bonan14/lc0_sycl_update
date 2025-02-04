@@ -633,6 +633,7 @@ class NodeTree {
   ~NodeTree() { DeallocateTree(); }
   // Adds a move to current_head_.
   void MakeMove(Move move);
+  void UndoMove();
   // Resets the current head to ensure it doesn't carry over details from a
   // previous search.
   void TrimTreeAtHead();

@@ -485,6 +485,23 @@ void NodeTree::MakeMove(Move move) {
   history_.Append(move);
 }
 
+void NodeTree::UndoMove() {
+    // We cannot undo if current head already terminal.
+    if (current_head_->IsTerminal()) {
+        std::cerr << "Cannot undo a terminal position." << std::endl;
+        return; 
+    }
+    if (current_head_->parent_ == nullptr) {
+        std::cerr << "Already at root; cannot undo further." << std::endl;
+        return;
+    }
+    // Move current_head_ back to its parent
+    current_head_ = current_head_->parent_;
+    // Remove the last move from history
+    /*if (!history_.empty())*/ history_->Last().Pop();
+}
+
+
 void NodeTree::TrimTreeAtHead() {
   // If solid, this will be empty before move and will be moved back empty
   // afterwards which is fine.

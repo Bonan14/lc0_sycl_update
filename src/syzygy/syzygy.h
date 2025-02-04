@@ -114,8 +114,8 @@ class SyzygyTablebase {
   WDLScore search(const Position& pos, ProbeState* result);
   int evaluate_position(const Position& pos, const Move& move, bool is_root);
   int evaluate_recursive(const Position& pos, int depth);
-  static constexpr int WDL_Rank[] = {-900, -800, 1, 800, 900};
-  static constexpr int DEFAULT_SCORE = 1;
+  static constexpr int WDL_Rank[] = {-900, -800, 0, 800, 900};
+  static constexpr int DEFAULT_SCORE = 0;
   static constexpr int CHECKMATE_SCORE = 1000;
   static constexpr int ZEROING_BONUS = 50;
 

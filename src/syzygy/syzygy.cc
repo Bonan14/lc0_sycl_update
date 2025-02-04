@@ -1504,7 +1504,7 @@ WDLScore SyzygyTablebase::search(const Position& pos, ProbeState* result) {
     move_count++;
     auto new_pos = Position(pos, move);
     value = static_cast<WDLScore>(-search<false>(new_pos, result));
-    new_pos = pos.GetBoard(); // Undo move.
+    new_pos = pos; // Undo move.
     if (*result == FAIL) return WDL_DRAW;
     if (value > best_value) {
       best_value = value;
@@ -1526,7 +1526,7 @@ WDLScore SyzygyTablebase::search(const Position& pos, ProbeState* result) {
   } else {
     int raw_result = static_cast<int>(ProbeState::OK);
     value = static_cast<WDLScore>(
-        impl_->probe_wdl_table<WDL>(pos.GetBoard(), &raw_result));
+        impl_->probe_wdl_table(pos.GetBoard(), &raw_result));
     *result = static_cast<ProbeState>(raw_result);
     if (*result == FAIL) return WDL_DRAW;
   }
@@ -1549,7 +1549,7 @@ WDLScore SyzygyTablebase::search(const Position& pos, ProbeState* result) {
 //  2 : win
 WDLScore SyzygyTablebase::probe_wdl(const Position& pos, ProbeState* result) {
   *result = OK;
-  return search(pos, result);
+  return search<false>(pos, result);
 }
 
 // Probe the DTZ table for a particular position.
@@ -1683,26 +1683,27 @@ bool SyzygyTablebase::root_probe(const Position& pos, bool has_repeated,
 //
 // A return value false indicates that not all probes were successful.
 bool SyzygyTablebase::root_probe_wdl(const Position& pos, std::vector<Move>* safe_moves) {
-    static const int WDL_to_rank[] = {-900, -800, 0, 800, 900};
+    static const int WDL_to_rank[] = {-1000, -800, 0, 800, 1000};
 
     auto root_moves = pos.GetBoard().GenerateLegalMoves();
     ProbeState result;
     std::vector<int> ranks;
     ranks.reserve(root_moves.size());
-    int best_rank = -900;
+    int best_rank = -1000;
 
     // Probe and rank each move
     for (const auto& move : root_moves) {
         Position nextPos(pos, move);
-        const WDLScore wdl = static_cast<WDLScore>(-probe_wdl<WDL>(nextPos, &result));
-
+        const WDLScore wdl = static_cast<WDLScore>(-probe_wdl(nextPos, &result));
         // Check for immediate checkmate
-        if (nextPos.GetBoard().GenerateLegalMoves().empty() && nextPos.GetBoard().IsUnderCheck()) {
-            ranks.push_back(-CHECKMATE_SCORE); // Negative because it's a loss for the current player
+        /*if (nextPos.GetBoard().GenerateLegalMoves().empty() 
+            && nextPos.GetBoard().IsUnderCheck()
+            && nextPos.GetRule50Ply() < 101) {
+            ranks.push_back(CHECKMATE_SCORE); // Negative because it's a loss for the current player
         } else {
             ranks.push_back(WDL_to_rank[wdl + 2]);
-        }
-
+        }*/
+        ranks.push_back(WDL_to_rank[wdl + 2]);
         // Track the best rank
         if (ranks.back() > best_rank) {
             best_rank = ranks.back();
@@ -1719,6 +1720,7 @@ bool SyzygyTablebase::root_probe_wdl(const Position& pos, std::vector<Move>* saf
     return true;
 }
 
+
 int SyzygyTablebase::evaluate_move(const Position& pos, const Move& move) {
     return evaluate_position(pos, move, false);
 }
@@ -1733,31 +1735,22 @@ int SyzygyTablebase::evaluate_position(const Position& pos, const Move& move, bo
     int raw_result = static_cast<int>(ProbeState::OK);
     ProbeState result;
     int move_score = DEFAULT_SCORE;
+    int r_50 = nextPos.GetRule50Ply();
 
     // Calculate the WDL rank for the given move
-    const WDLScore wdl = is_root ? static_cast<WDLScore>(-probe_wdl<WDL>(nextPos, &result))
-                                 : static_cast<WDLScore>(-impl_->probe_wdl_table<WDL>(board, &raw_result));
-                                 
-    //if (!is_root) result = static_cast<ProbeState>(raw_result);
-
-    if (wdl) {
-        move_score = WDL_Rank[wdl + 2];
-    } else {
-        move_score = DEFAULT_SCORE;
-    }
+    const WDLScore wdl = is_root ? static_cast<WDLScore>(probe_wdl(nextPos, &result))
+                                 : static_cast<WDLScore>(impl_->probe_wdl_table(board, &raw_result));
+    move_score = WDL_Rank[wdl + 2];
     
     // Check for checkmate
-    if (board.GenerateLegalMoves().empty() && board.IsUnderCheck()) {
-        move_score = -CHECKMATE_SCORE;
+    if (board.GenerateLegalMoves().empty()
+        && r_50 <= 100) {
+          board.IsUnderCheck() ? 
+          move_score = CHECKMATE_SCORE : move_score = DEFAULT_SCORE;
         //return move_score;
     }
-    
-    // If no immediate terminal condition is found, use recursive evaluation
-    /*if (move_score != std::abs(CHECKMATE_SCORE)) {
-        move_score = evaluate_recursive(nextPos, 6); // Pos to eval with 6-ply lookahead
-    }*/
 
-    return move_score;
+    return -move_score;
 }
 
 int SyzygyTablebase::evaluate_recursive(const Position& pos, int depth) { 
@@ -1765,33 +1758,32 @@ int SyzygyTablebase::evaluate_recursive(const Position& pos, int depth) {
   const ChessBoard& board = pos.GetBoard();
   auto legal_moves = board.GenerateLegalMoves();
     
-  for (auto move : legal_moves) {
-    Position next_pos(pos, move);
-    const ChessBoard& board_ = next_pos.GetBoard();
-    int raw_result = static_cast<int>(ProbeState::OK);
-    ProbeState state;
-    // Base cases
-    if (depth > 0) {
-        // Fall back to tablebase probe for leaf nodes
-        const WDLScore wdl = static_cast<WDLScore>(impl_->probe_wdl_table(board_, &raw_result));
-        state = static_cast<ProbeState>(raw_result);
-        if (wdl) best_score = WDL_Rank[wdl + 2];
-        best_score = DEFAULT_SCORE; // Default if no tablebase info
+  while (depth >= 0) {
+    for (auto move : legal_moves) {
+      Position next_pos(pos, move);
+      const ChessBoard& board_ = next_pos.GetBoard();
+      int raw_result = static_cast<int>(ProbeState::OK);
+      int r_50_ = next_pos.GetRule50Ply();
+      ProbeState state;
+      // Base cases
+      // Fall back to tablebase probe for leaf nodes
+      const WDLScore wdl = static_cast<WDLScore>(impl_->probe_wdl_table(board_, &raw_result));
+      state = static_cast<ProbeState>(raw_result);
+      if (wdl) best_score = WDL_Rank[wdl + 2];
+      best_score = DEFAULT_SCORE; // Default if no tablebase info
     
-        // Terminal node check
-        if (board_.GenerateLegalMoves().empty()) {
-          board_.IsUnderCheck() ? best_score = CHECKMATE_SCORE : best_score = DEFAULT_SCORE;
+      // Terminal node check
+      if (board_.GenerateLegalMoves().empty() &&
+          r_50_ < 101) {
+          int sign = std::copysign(1, WDL_Rank[wdl + 2]);
+          board_.IsUnderCheck() ? 
+          best_score = CHECKMATE_SCORE * sign : best_score = DEFAULT_SCORE;
           return best_score;
          }
-        auto moves = board_.GenerateLegalMoves();
-        for (auto move_ : moves) {
-            Position newPos(next_pos, move_);
-            int score = -evaluate_recursive(newPos, depth - 1);
-            best_score = score;
-        }
+     //best_score = -evaluate_recursive(next_pos, move);
     }
+   depth--;
   }
-
     return best_score;
 }
 
