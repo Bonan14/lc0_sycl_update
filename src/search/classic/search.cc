@@ -1922,6 +1922,11 @@ void SearchWorker::PickNodesToExtendTask(
   }
 }
 
+void SearchWorker::HandleTerminalState(Node* node, int score, float m) {
+    
+}
+
+
 void SearchWorker::ExtendNode(Node* node, int depth,
                               const std::vector<Move>& moves_to_node,
                               PositionHistory* history) {
